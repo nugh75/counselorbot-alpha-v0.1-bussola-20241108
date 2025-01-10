@@ -167,7 +167,7 @@ async def serve_index():
     return FileResponse(index_file)
 
 # Configurazione del server LLM locale
-LLM_SERVER_URL = "http://localhost:1234/v1/chat/completions"
+LLM_SERVER_URL = "http://host.docker.internal:1234/v1/chat/completions"
 MODEL_NAME = "qwen2.5-coder-7b-instruct"  # Nome del modello utilizzato da LMStudio - reso globale
 
 
@@ -280,4 +280,4 @@ async def health_check():
 # Avvio del server
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8111)
