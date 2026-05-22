@@ -1,0 +1,14 @@
+venv/
+__pycache__/
+*.pyc
+.git/
+.gitignore
+.env
+README.md
+AGENTS.md
+LICENSE
+app/dependencies.txt
+app/static/styles_old.css
+docker-compose.yml
+Dockerfile
+docker-entrypoint.sh
