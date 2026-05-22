@@ -1,30 +1,70 @@
+import logging
+import os
+import sys
+from typing import List
+
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
+from dotenv import load_dotenv
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.docstore.document import Document
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
-from typing import List
-import os
-import logging
-from PyPDF2 import PdfReader
-from docx import Document as DocxDocument
-from pptx import Presentation
-from dotenv import load_dotenv
 
-# Configurazione logging
+import faiss_manager
+from file_processor import extract_file_content, create_documents_from_file
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# Caricamento variabili di ambiente
 load_dotenv()
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# Directory Configurazione
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai").strip().lower()
+
+PROVIDER_CONFIG = {
+    "openai": {
+        "api_key": os.getenv("OPENAI_API_KEY"),
+        "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+        "base_url": None,
+    },
+    "openrouter": {
+        "api_key": os.getenv("OPENROUTER_API_KEY"),
+        "model": os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.2-3b-instruct:free"),
+        "base_url": "https://openrouter.ai/api/v1",
+    },
+    "groq": {
+        "api_key": os.getenv("GROQ_API_KEY"),
+        "model": os.getenv("GROQ_MODEL", "llama3-8b-8192"),
+        "base_url": "https://api.groq.com/openai/v1",
+    },
+    "togetherai": {
+        "api_key": os.getenv("TOGETHERAI_API_KEY"),
+        "model": os.getenv("TOGETHERAI_MODEL", "mistralai/Mixtral-8x7B-Instruct-v0.1"),
+        "base_url": "https://api.together.xyz/v1",
+    },
+    "deepseek": {
+        "api_key": os.getenv("DEEPSEEK_API_KEY"),
+        "model": os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
+        "base_url": "https://api.deepseek.com",
+    },
+}
+
+if LLM_PROVIDER not in PROVIDER_CONFIG:
+    logger.warning(f"Provider '{LLM_PROVIDER}' sconosciuto, uso 'openai' di fallback.")
+    LLM_PROVIDER = "openai"
+
+cfg = PROVIDER_CONFIG[LLM_PROVIDER]
+if not cfg["api_key"]:
+    logger.error(f"Nessuna API key configurata per il provider '{LLM_PROVIDER}'.")
+    sys.exit(f"ERRORE: Aggiungi {LLM_PROVIDER.upper()}_API_KEY in .env")
+
+logger.info(f"Provider LLM: {LLM_PROVIDER} | Modello: {cfg['model']}")
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_FOLDER = os.path.join(BASE_DIR, "static")
 UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
@@ -33,64 +73,78 @@ os.makedirs(STATIC_FOLDER, exist_ok=True)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(DB_FOLDER, exist_ok=True)
 
-# Configurazione embeddings tramite HuggingFace
 HUGGINGFACE_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-embeddings = HuggingFaceEmbeddings(model_name=HUGGINGFACE_MODEL_NAME, cache_folder="./huggingface_cache")
-logger.info(f"Embeddings configurati con il modello {HUGGINGFACE_MODEL_NAME}")
+CACHE_FOLDER = os.path.join(BASE_DIR, "huggingface_cache")
 
-# Configurazione Database FAISS
-def create_faiss_database():
-    """
-    Crea un nuovo database FAISS a partire dai dati originali.
-    """
-    logger.info("Creazione di un nuovo database FAISS.")
-    documents = [
-        Document(page_content="Esempio di contenuto", metadata={"filename": "esempio.pdf", "page_number": 1}),
-        # Aggiungi qui i tuoi documenti
-    ]
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
-    texts = text_splitter.split_documents(documents)
-    db = FAISS.from_documents(texts, embeddings)
-    db.save_local(db_path)
-    return db
+_embeddings = None
+_faiss_index = None
+_FAISS_UNAVAILABLE = object()
 
-try:
-    db_path = os.path.join(DB_FOLDER, "my_database")
-    faiss_index = FAISS.load_local(db_path, embeddings, allow_dangerous_deserialization=True)
-    logger.info(f"Database FAISS caricato da {db_path}")
-except Exception as e:
-    logger.error(f"Errore nel caricamento del database FAISS: {e}")
-    logger.info("Creazione di un nuovo database FAISS.")
-    faiss_index = create_faiss_database()
 
-# Inizializzazione FastAPI
-app = FastAPI()
+def get_embeddings():
+    global _embeddings
+    if _embeddings is None:
+        _embeddings = HuggingFaceEmbeddings(
+            model_name=HUGGINGFACE_MODEL_NAME,
+            cache_folder=CACHE_FOLDER,
+        )
+        logger.info(f"Embeddings caricati: {HUGGINGFACE_MODEL_NAME}")
+    return _embeddings
 
-# Configurazione CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Permette richieste da qualsiasi origine
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
-# Monta i file statici
-app.mount("/static", StaticFiles(directory=STATIC_FOLDER), name="static")
+def get_faiss_index():
+    global _faiss_index
+    if _faiss_index is None:
+        db_path = os.path.join(DB_FOLDER, "my_database")
+        try:
+            _faiss_index = FAISS.load_local(
+                db_path,
+                get_embeddings(),
+                allow_dangerous_deserialization=True,
+            )
+            logger.info(f"FAISS caricato da {db_path}")
+        except Exception as e:
+            logger.warning(f"FAISS non caricato ({e})")
+            _faiss_index = _FAISS_UNAVAILABLE
+    return None if _faiss_index is _FAISS_UNAVAILABLE else _faiss_index
 
-# Funzione per recuperare contesto dal database FAISS
+
+def get_llm(temperature: float = 0.7):
+    kwargs = {
+        "model": cfg["model"],
+        "api_key": cfg["api_key"],
+        "temperature": temperature,
+        "request_timeout": 60,
+    }
+    if cfg["base_url"]:
+        kwargs["base_url"] = cfg["base_url"]
+    return ChatOpenAI(**kwargs)
+
+
+def _to_langchain_messages(messages: list) -> list:
+    role_map = {
+        "system": SystemMessage,
+        "user": HumanMessage,
+        "assistant": AIMessage,
+    }
+    result = []
+    for m in messages:
+        cls = role_map.get(m["role"])
+        if cls:
+            result.append(cls(content=m["content"]))
+    return result
+
+
 def retrieve_context(query: str) -> List[dict]:
-    if not faiss_index:
-        logger.warning("Database FAISS non caricato. Nessun contesto disponibile.")
-        return [
-            {"content": "Database FAISS non disponibile. Contesto non recuperabile.", "source": {"filename": "n/a", "page_number": "n/a"}}
-        ]
+    index = get_faiss_index()
+    if not index:
+        logger.warning("FAISS non disponibile.")
+        return []
+    if not query.strip():
+        return []
     try:
-        if not query.strip():
-            logger.warning("La query fornita è vuota.")
-            return []
-        docs = faiss_index.similarity_search(query, k=5)
-        logger.info(f"{len(docs)} documenti trovati per la query: '{query}'")
+        docs = index.similarity_search(query, k=5)
+        logger.info(f"{len(docs)} documenti trovati per: '{query}'")
         return [
             {
                 "content": doc.page_content,
@@ -102,147 +156,173 @@ def retrieve_context(query: str) -> List[dict]:
             for doc in docs
         ]
     except Exception as e:
-        logger.error(f"Errore durante il recupero del contesto: {e}")
+        logger.error(f"Errore retrieve_context: {e}")
         return []
 
-# Funzione per elaborare i file caricati
-def extract_content(file_path: str) -> List[str]:
-    try:
-        if file_path.endswith(".pdf"):
-            reader = PdfReader(file_path)
-            return [page.extract_text() for page in reader.pages if page.extract_text()]
-        elif file_path.endswith(".docx"):
-            doc = DocxDocument(file_path)
-            return [para.text for para in doc.paragraphs if para.text.strip()]
-        elif file_path.endswith(".pptx"):
-            ppt = Presentation(file_path)
-            text = []
-            for slide in ppt.slides:
-                for shape in slide.shapes:
-                    if hasattr(shape, "text"):
-                        text.append(shape.text)
-            return text
-        else:
-            raise ValueError("Formato file non supportato.")
-    except Exception as e:
-        logger.error(f"Errore durante l'elaborazione del file {file_path}: {e}")
-        raise HTTPException(status_code=500, detail="Errore durante l'elaborazione del file.")
 
-# Funzione per estrarre testo da PDF
-def extract_text_from_pdf(file_path: str) -> str:
-    try:
-        reader = PdfReader(file_path)
-        text = []
-        for page in reader.pages:
-            if page.extract_text():
-                text.append(page.extract_text())
-        return "\n".join(text)
-    except Exception as e:
-        logger.error(f"Errore durante l'elaborazione del PDF: {e}")
-        raise HTTPException(status_code=500, detail="Errore durante l'elaborazione del PDF.")
+app = FastAPI()
 
-# Endpoint per caricare e processare un PDF
-@app.post("/upload-and-process")
-async def upload_and_process(file: UploadFile = File(...)):
-    """
-    Carica un file PDF, estrae il testo e lo restituisce.
-    """
-    try:
-        file_path = os.path.join(UPLOAD_FOLDER, file.filename)
-        with open(file_path, "wb") as f:
-            f.write(file.file.read())
-        logger.info(f"File caricato: {file.filename}")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-        # Estrai il testo dal PDF
-        extracted_text = extract_text_from_pdf(file_path)
+app.mount("/static", StaticFiles(directory=STATIC_FOLDER), name="static")
 
-        # Restituisci il testo al frontend
-        return {"message": "File processato correttamente", "extracted_text": extracted_text}
-    except Exception as e:
-        logger.error(f"Errore durante l'elaborazione del file: {e}")
-        raise HTTPException(status_code=500, detail="Errore durante l'elaborazione del file.")
 
-# Route per servire index.html
 @app.get("/", response_class=FileResponse)
 async def serve_index():
-    index_file = os.path.join(STATIC_FOLDER, "index.html")
-    if not os.path.exists(index_file):
-        logger.error("Il file index.html non è stato trovato.")
-        raise HTTPException(status_code=404, detail="Il file index.html non è disponibile.")
-    return FileResponse(index_file)
+    path = os.path.join(STATIC_FOLDER, "index.html")
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="index.html non trovato")
+    return FileResponse(path)
 
-# Endpoint per completamento della chat
+
+@app.get("/embed", response_class=FileResponse)
+async def serve_embed():
+    path = os.path.join(STATIC_FOLDER, "embed.html")
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="embed.html non trovato")
+    return FileResponse(path)
+
+
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
+
+
 class ChatRequest(BaseModel):
     messages: List[dict]
     temperature: float = 0.7
+
 
 @app.post("/v1/chat/completions")
 async def chat_completion(request: ChatRequest):
     try:
         user_message = request.messages[-1]["content"]
-        logger.info(f"Messaggio ricevuto dall'utente: {user_message}")
+        logger.info(f"Messaggio utente: {user_message}")
 
-        context_with_sources = retrieve_context(user_message)
-        if not context_with_sources:
-            logger.warning("Nessun contesto trovato.")
-            return {"llm_response": "Non ho trovato contesto rilevante. Rispondo comunque alla domanda.", "context_chunks": []}
+        context = retrieve_context(user_message)
 
-        context_text = "\n".join([
-            f"\u2022 {item['content']} (Fonte: {item['source']['filename']}, Pagina: {item['source']['page_number']})"
-            for item in context_with_sources
-        ])
+        augmented = list(request.messages)
+        if context:
+            context_text = "\n".join(
+                f"– {c['content']} (Fonte: {c['source']['filename']}, Pagina: {c['source']['page_number']})"
+                for c in context
+            )
+            for msg in augmented:
+                if msg["role"] == "system":
+                    msg["content"] = f"{msg['content']}\n\nContesto:\n{context_text}"
+                    break
+            else:
+                augmented.insert(0, {"role": "system", "content": f"Contesto:\n{context_text}"})
 
-        augmented_messages = [
-            {"role": "system", "content": f"Usa queste informazioni:\n{context_text}"}
-        ] + request.messages
+        lc_messages = _to_langchain_messages(augmented)
+        llm = get_llm(request.temperature)
+        response = llm.invoke(lc_messages)
+        logger.info(f"Risposta LLM: {response.content[:100]}...")
 
-        llm = ChatOpenAI(model="gpt-4o-mini", openai_api_key=OPENAI_API_KEY)
-        response = llm.predict_messages(messages=augmented_messages, temperature=request.temperature)
-        logger.info(f"Risposta dal modello: {response.content}")
-
-        return {"llm_response": response.content, "context_chunks": context_with_sources}
+        return {"llm_response": response.content, "context_chunks": context or []}
     except Exception as e:
-        logger.error(f"Errore nel completamento della chat: {e}")
-        raise HTTPException(status_code=500, detail="Errore nel completamento della chat.")
+        logger.error(f"Errore chat_completion: {e}")
+        err = str(e)
+        if "insufficient_quota" in err:
+            detail = "Credito insufficiente per il provider attuale."
+        elif "rate_limit" in err.lower() or "429" in err:
+            detail = "Limite di richieste superato. Attendi e riprova."
+        else:
+            detail = err
+        raise HTTPException(status_code=500, detail=detail)
 
-# Endpoint per caricamento file
+
+@app.post("/upload-and-process")
+async def upload_and_process(file: UploadFile = File(...)):
+    try:
+        path = os.path.join(UPLOAD_FOLDER, file.filename)
+        with open(path, "wb") as f:
+            f.write(file.file.read())
+        text = extract_file_content(path)
+        return {"message": "File processato", "extracted_text": text}
+    except Exception as e:
+        logger.error(f"upload_and_process error: {e}")
+        raise HTTPException(status_code=500, detail="Errore elaborazione file.")
+
+
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
     try:
-        file_path = os.path.join(UPLOAD_FOLDER, file.filename)
-        with open(file_path, "wb") as f:
+        path = os.path.join(UPLOAD_FOLDER, file.filename)
+        with open(path, "wb") as f:
             f.write(file.file.read())
-        logger.info(f"File caricato: {file.filename}")
-
-        # Estrai contenuto dal file
-        content = extract_content(file_path)
-        logger.info(f"Contenuto estratto dal file {file.filename}: {len(content)} righe.")
-
-        return {"message": "File caricato ed elaborato correttamente", "filename": file.filename, "content": content[:5]}
+        content = extract_file_content(path)
+        lines = content.split("\n")
+        return {
+            "message": "File caricato",
+            "filename": file.filename,
+            "content": [l for l in lines[:5] if l.strip()],
+        }
     except Exception as e:
-        logger.error(f"Errore durante il caricamento o l'elaborazione del file: {e}")
-        raise HTTPException(status_code=500, detail="Errore durante il caricamento o l'elaborazione del file.")
+        logger.error(f"upload error: {e}")
+        raise HTTPException(status_code=500, detail="Errore upload.")
 
-# Endpoint di debug FAISS
+
+@app.post("/faiss/upload")
+async def upload_file_to_faiss(file: UploadFile = File(...)):
+    try:
+        path = os.path.join(UPLOAD_FOLDER, file.filename)
+        with open(path, "wb") as f:
+            f.write(file.file.read())
+        documents = create_documents_from_file(path)
+        result = faiss_manager.add_documents(
+            [{"content": d.page_content, "metadata": d.metadata} for d in documents]
+        )
+        if "error" in result:
+            raise HTTPException(status_code=500, detail=result["error"])
+        global _faiss_index
+        _faiss_index = None
+        return {"message": "File aggiunto al database FAISS", "filename": file.filename}
+    except Exception as e:
+        logger.error(f"faiss/upload error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/faiss/list")
+async def list_faiss_documents():
+    try:
+        return faiss_manager.list_documents()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/faiss/remove-file/{filename}")
+async def remove_file_from_faiss(filename: str):
+    try:
+        result = faiss_manager.remove_documents_by_filename(filename)
+        if "error" in result:
+            raise HTTPException(status_code=500, detail=result["error"])
+        global _faiss_index
+        _faiss_index = None
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/debug/faiss")
 async def debug_faiss():
-    """
-    Debug per verificare il contenuto del database FAISS.
-    """
-    if not faiss_index:
-        return {"message": "Database FAISS non caricato."}
+    index = get_faiss_index()
+    if not index:
+        return {"message": "FAISS non caricato."}
     try:
-        return {"documents": faiss_index.similarity_search("debug query", k=5)}
+        docs = index.similarity_search("debug", k=5)
+        return {"documents": [d.page_content[:200] for d in docs]}
     except Exception as e:
-        logger.error(f"Errore durante il debug di FAISS: {e}")
-        return {"message": "Errore durante il debug di FAISS."}
+        logger.error(f"debug_faiss: {e}")
+        return {"message": "Errore debug FAISS."}
 
-# Endpoint di verifica server
-@app.get("/health")
-async def health_check():
-    return {"status": "ok"}
 
-# Avvio del server
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -1,0 +1,14 @@
+TEST EMBED WIDGET
+
+Metodo A — Pagina senza CSP (raccomandato):
+1. Avvia backend:  cd app && source venv/bin/activate && python backend.py
+2. Firefox → apri about:blank
+3. F12 → Console → incolla questa riga UNICA:
+
+document.body.insertAdjacentHTML('beforeend','<iframe src="http://localhost:8000/embed" style="border:none;position:fixed;bottom:20px;right:20px;width:400px;height:600px;z-index:9999;box-shadow:0 4px 20px rgba(0,0,0,.2);border-radius:12px;"></iframe>');
+
+Metodo B — Diretto (nessun embed, usi il widget standalone):
+1. Firefox → http://localhost:8000/embed
+
+Metodo C — Embed su pagina tua (controlli tu il CSP):
+<iframe src="http://localhost:8000/embed" style="border:none;position:fixed;bottom:20px;right:20px;width:400px;height:600px;z-index:9999;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,.2);"></iframe>

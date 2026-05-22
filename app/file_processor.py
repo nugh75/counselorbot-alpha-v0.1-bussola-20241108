@@ -1,7 +1,9 @@
+import os
 from PyPDF2 import PdfReader
 from docx import Document as DocxDocument
 from pptx import Presentation
 from langchain.docstore.document import Document
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 def extract_file_content(file_path: str) -> str:
     """
@@ -29,12 +31,16 @@ def extract_file_content(file_path: str) -> str:
 
 def create_documents_from_file(file_path: str) -> list:
     """
-    Crea documenti FAISS da un file processato.
+    Crea documenti FAISS da un file processato con chunking semantico.
     """
     content = extract_file_content(file_path)
-    lines = content.split("\n")  # Dividi il contenuto in righe
+    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+    chunks = splitter.split_text(content)
     documents = [
-        Document(page_content=line, metadata={"filename": file_path, "page_number": i + 1})
-        for i, line in enumerate(lines) if line.strip()
+        Document(
+            page_content=chunk,
+            metadata={"filename": os.path.basename(file_path), "page_number": i + 1}
+        )
+        for i, chunk in enumerate(chunks) if chunk.strip()
     ]
     return documents

@@ -162,6 +162,8 @@ cython_debug/
 #.idea/
 File/
 uploads/
+app/db/my_database/
+app/db/registry.json
 myenv
 huggingface_cache/
 .DS_Store

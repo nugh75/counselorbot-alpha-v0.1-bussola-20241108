@@ -1,13 +1,12 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
-from typing import List
 import os
 import faiss_manager
 from file_processor import create_documents_from_file
 
 app = FastAPI()
 
-# Directory per file caricati
-UPLOAD_FOLDER = "uploads"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 @app.post("/faiss/upload")
@@ -36,32 +35,9 @@ async def list_documents():
     Elenca i documenti nel database FAISS.
     """
     try:
-        faiss_index = faiss_manager.load_faiss()  # Carica il database FAISS
-        # Usa una query arbitraria per ottenere documenti
-        all_docs = faiss_index.similarity_search("all documents", k=5)  # Recupera i primi 5 documenti
-        return [
-            {
-                "content_preview": doc.page_content[:50],  # Anteprima dei primi 50 caratteri
-                "filename": doc.metadata.get("filename", "sconosciuto"),
-                "page_number": doc.metadata.get("page_number", "n/a"),
-            }
-            for doc in all_docs
-        ]
+        return faiss_manager.list_documents()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Errore durante l'elenco dei documenti: {e}")
-
-@app.delete("/faiss/remove-file/{filename}")
-async def remove_file(filename: str):
-    """
-    Rimuove documenti associati a un file specifico dal database FAISS.
-    """
-    try:
-        result = faiss_manager.remove_documents_by_filename(filename)
-        if "error" in result:
-            raise HTTPException(status_code=500, detail=result["error"])
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/faiss/remove-file/{filename}")
 async def remove_file(filename: str):

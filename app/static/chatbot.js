@@ -18,7 +18,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Aggiungi questo dopo gli elementi principali
     const fullscreenButton = document.createElement('button');
     fullscreenButton.id = 'fullscreen-button';
-    fullscreenButton.innerHTML = '⛶'; // Simbolo per fullscreen
+    fullscreenButton.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>';
     fullscreenButton.title = 'Modalità schermo intero';
     chatContainer.querySelector('.chat-header-content').appendChild(fullscreenButton);
 
@@ -110,10 +110,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     fullscreenButton.addEventListener('click', () => {
         if (currentState === CHAT_STATES.SIDEBAR) {
             updateChatState(CHAT_STATES.FULLSCREEN);
-            fullscreenButton.innerHTML = '⊏'; // Icona per tornare alla modalità laterale
+            fullscreenButton.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/></svg>';
         } else {
             updateChatState(CHAT_STATES.SIDEBAR);
-            fullscreenButton.innerHTML = '⛶'; // Icona per espandere
+            fullscreenButton.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>';
         }
     });
 
@@ -164,7 +164,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         formData.append('file', file);
 
         try {
-            const response = await fetch('http://localhost:8000/upload-and-process', {
+            const response = await fetch('/upload-and-process', {
                 method: 'POST',
                 body: formData,
             });
@@ -174,8 +174,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
 
             const responseData = await response.json();
-            console.log('Risposta dal backend:', responseData);
-
             // Aggiungi il titolo del file e il contenuto estratto al prompt
             const extractedText = responseData.extracted_text;
             if (extractedText) {
@@ -212,7 +210,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 userInput.style.height = 'auto'; // Resetta altezza dopo invio
 
                 // Invio al backend
-                const response = await fetch('http://localhost:8000/v1/chat/completions', {
+                const response = await fetch('/v1/chat/completions', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -225,11 +223,15 @@ document.addEventListener('DOMContentLoaded', async () => {
                 });
 
                 if (!response.ok) {
-                    throw new Error(`HTTP error! Status: ${response.status}`);
+                    let detail = `Errore HTTP ${response.status}`;
+                    try {
+                        const errBody = await response.json();
+                        if (errBody.detail) detail = errBody.detail;
+                    } catch (_) {}
+                    throw new Error(detail);
                 }
 
                 const responseData = await response.json();
-                console.log('Risposta ricevuta dal backend:', responseData);
 
                 const botResponse = responseData.llm_response;
                 const contextChunks = responseData.context_chunks;
@@ -247,7 +249,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             } catch (error) {
                 console.error('Errore durante la comunicazione con il backend:', error);
-                addMessage('Errore di connessione. Controlla il server.', 'bot');
+                const msg = error.message.includes('Failed to fetch') || error.message.includes('NetworkError')
+                    ? 'Errore di connessione. Il server non è raggiungibile.'
+                    : `Errore: ${error.message}`;
+                addMessage(msg, 'bot');
             } finally {
                 setInputState(false); // Riabilita input
             }

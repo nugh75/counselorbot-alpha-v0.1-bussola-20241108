@@ -41,11 +41,15 @@ Before installing CounselorBot, ensure you have the following:
 
 1. **Clone the Repository**:
    ```bash
-   git clone https://github.com/nugh75/Counselorbot.git
-   cd Counselorbot
+    git clone https://github.com/nugh75/counselorbot-alpha-v0.1-bussola-20241108.git
+    cd counselorbot-alpha-v0.1-bussola-20241108
    ```
 
 2. **Setup the Backend**:
+   - Navigate to the `app` directory:
+     ```bash
+     cd app
+     ```
    - Create a virtual environment and activate it:
      ```bash
      python -m venv venv
@@ -53,14 +57,85 @@ Before installing CounselorBot, ensure you have the following:
      ```
    - Install the required Python dependencies:
      ```bash
-     pip install -r requirements.txt
+     pip install -r ../requirements.txt
      ```
 
-3. **Run the Application**:
-   - Start the backend server:
-     ```bash
-     python backend.py
-     ```
+3. **Configure your API key**:
+   ```bash
+   cp ../.env.example .env
+   # edit .env: set LLM_PROVIDER and your API key
+   ```
+
+4. **Run the Application**:
+   ```bash
+   python backend.py
+   ```
+
+## Configuration
+
+### `.env` Setup
+
+Copy `.env.example` to `app/.env` and configure your LLM provider:
+
+```bash
+cp .env.example app/.env
+```
+
+Edit `app/.env`:
+
+1. **Choose a provider** — set `LLM_PROVIDER` to one of: `openai`, `openrouter`, `groq`, `togetherai`, `deepseek`
+2. **Set the API key** — fill in the corresponding `*_API_KEY` for your chosen provider
+3. **Override the model (optional)** — uncomment and set the `*_MODEL` variable to use a different model
+
+**Supported providers:**
+
+| Provider | `LLM_PROVIDER` | Default model |
+|----------|---------------|---------------|
+| [OpenRouter](https://openrouter.ai) | `openrouter` | `meta-llama/llama-3.2-3b-instruct:free` |
+| [Groq](https://console.groq.com) | `groq` | `llama3-8b-8192` |
+| [Together.ai](https://together.ai) | `togetherai` | `mistralai/Mixtral-8x7B-Instruct-v0.1` |
+| [DeepSeek](https://deepseek.com) | `deepseek` | `deepseek-chat` |
+| [OpenAI](https://platform.openai.com) | `openai` | `gpt-4o-mini` |
+
+### Running
+
+```bash
+cd app
+source venv/bin/activate
+python backend.py
+# → http://localhost:8000
+```
+
+FAISS vector database, HuggingFace embeddings, and file upload processing are all configured automatically. See `app/static/instructions.txt` to customize the system prompt (Italian).
+
+### Embed in another website
+
+Serve the widget on any site via iframe:
+
+```html
+<iframe src="https://your-server.com/embed" width="400" height="600"
+  style="border:none; position:fixed; bottom:20px; right:20px; z-index:9999;"
+  title="Counselorbot"></iframe>
+```
+
+Or use a floating embed with a link to open the full app:
+
+```html
+<!-- Floating widget -->
+<iframe src="https://your-server.com/embed" width="400" height="600"
+  style="border:none; position:fixed; bottom:20px; right:20px; z-index:9999;"
+  title="Counselorbot"></iframe>
+<!-- Link to full version -->
+<p style="position:fixed; bottom:5px; right:20px; font-size:12px;">
+  <a href="https://your-server.com/" target="_blank">Apri versione completa</a>
+</p>
+```
+
+The widget automatically:
+- Shows a floating chat button (bottom-right)
+- Loads the system prompt from `instructions.txt`
+- Uses RAG context from FAISS when answering
+- Links to the full app in the footer
 
 ## Development Status
 
