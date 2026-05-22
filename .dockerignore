@@ -11,4 +11,3 @@ app/dependencies.txt
 app/static/styles_old.css
 docker-compose.yml
 Dockerfile
-docker-entrypoint.sh
