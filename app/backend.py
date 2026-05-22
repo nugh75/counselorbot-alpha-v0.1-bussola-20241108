@@ -189,6 +189,14 @@ async def serve_embed():
     return FileResponse(path)
 
 
+@app.get("/demo", response_class=FileResponse)
+async def serve_demo():
+    path = os.path.join(STATIC_FOLDER, "demo.html")
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="demo.html non trovato")
+    return FileResponse(path)
+
+
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
