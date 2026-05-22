@@ -57,7 +57,7 @@ Before installing CounselorBot, ensure you have the following:
      ```
    - Install the required Python dependencies:
      ```bash
-     pip install -r ../requirements.txt
+     pip install -r requirements.txt
      ```
 
 3. **Configure your API key**:
